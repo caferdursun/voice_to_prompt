@@ -30,3 +30,10 @@ voice_prompt_outputs/
 
 # Whisper-tr'ın geçici dosyaları (ihtimale karşı)
 vtp-raw.txt
+
+# Record mode geçici PID/FIFO
+vtp-record.pid
+vtp-record.pid.fifo
+
+# CLI flag'siz `whisper-tr --record` default klasörü
+skill_outputs/

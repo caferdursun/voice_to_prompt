@@ -1,6 +1,6 @@
 ---
 name: voice-to-prompt
-description: Türkçe + İngilizce karışık teknik ses kayıtlarını temiz prompt metinlerine dönüştürür. whisper-tr CLI ile transkript alır, çıktıyı mantık taramasından geçirir, sistematik hata şüphelerini kullanıcıya doğrulatır, düzeltilmiş sonucu timestamp'li olarak yapılandırılabilir bir output klasörüne kaydeder. Tekrarlayan yanlışları Whisper config'ine (initial_prompt / postproc_dict) önerir. Tetikleyiciler: kullanıcı bir ses dosyası (.m4a/.mp3/.wav/.aif/.flac/.ogg) paylaşıp transkript veya prompt istediğinde; "bunu transkript et", "sesten prompt yap", "bu kaydı yazıya çevir" gibi talepler.
+description: Türkçe + İngilizce karışık teknik ses kayıtlarını temiz prompt metinlerine dönüştürür. whisper-tr CLI ile transkript alır, çıktıyı mantık taramasından geçirir, sistematik hata şüphelerini kullanıcıya doğrulatır, düzeltilmiş sonucu timestamp'li olarak yapılandırılabilir bir output klasörüne kaydeder. Tekrarlayan yanlışları Whisper config'ine (initial_prompt / postproc_dict) önerir. macOS'ta canlı kayıt modu da destekler (whisper-tr --record). Tetikleyiciler: (a) kullanıcı bir ses dosyası (.m4a/.mp3/.wav/.aif/.flac/.ogg) paylaşıp transkript veya prompt istediğinde; (b) "bunu transkript et", "sesten prompt yap", "bu kaydı yazıya çevir" gibi talepler; (c) "kayıt başlat", "şimdi konuşacağım", "yeni ses kaydı al", "mikrofondan kaydet", "hemen söyleyeceğim" gibi canlı kayıt talepleri (macOS).
 ---
 
 # Voice-to-Prompt Skill
@@ -25,7 +25,19 @@ Ses kaydını → temiz, doğrulanmış teknik prompt'a dönüştürür. Arşivl
 
 Skill çalışmaya başlarken klasör yoksa `mkdir -p` ile oluştur.
 
-## Workflow
+## Mod Seçimi
+
+Hangi workflow tetiklenecek?
+
+| Tetikleyici | Mod |
+|---|---|
+| Kullanıcı bir ses dosyası yolu verdi | **Workflow A — File Mode** |
+| "kayıt başlat" / "şimdi konuşacağım" / "mikrofondan kaydet" + macOS | **Workflow B — Record Mode** |
+| Linux/WSL + record talebi | Hata: "Record mode sadece macOS. Lütfen kaydı alıp dosya yolu verin." |
+
+Step 2..7 (mantık taraması, AskUserQuestion, slug + timestamp dosya kaydı, config feedback, özet) iki modda da AYNIDIR.
+
+## Workflow A — File Mode
 
 ### Step 1 — Transkript al
 
@@ -38,6 +50,74 @@ whisper-tr "<input_path>" -o /tmp/vtp-raw.txt -q
 - Kullanıcı özel ad/terim söylediyse `-p "isim1, terim2"` ile prompt zenginleştir
 
 Dosya okunamazsa kullanıcıdan doğru path iste. Uzun dosyalar (>3 dk) için bilgilendirici mesaj ver.
+
+## Workflow B — Record Mode (macOS only)
+
+### Step 0 — Output yolunu hazırla
+
+```bash
+OUT_DIR="${VOICE_PROMPT_OUTPUT_DIR:-$(pwd)/voice_prompt_outputs}"
+mkdir -p "$OUT_DIR"
+TMP_OUT="$(mktemp -t vtp-rec).txt"
+```
+
+`TMP_OUT` Step 5'te slug üretildikten sonra final konumuna `mv` edilecek.
+
+### Step 0.1 — Kaydı arka planda başlat
+
+`whisper-tr`'ı **`run_in_background=true`** olan bir Bash tool çağrısı ile başlat:
+
+```bash
+whisper-tr --record "$TMP_OUT" --pidfile /tmp/vtp-record.pid -q
+```
+
+Kullanıcı özel ad/terim söylediyse `-p "..."` da ekle.
+
+### Step 0.2 — Kullanıcıya bildir
+
+> "Kayıt başladı (sistem default mikrofon, max 15 dk). Konuşmanız bitince **'tamam'**, **'dur'**, **'bitti'** veya benzeri bir mesaj atın — kaydı durdurup transkripte geçeceğim."
+
+### Step 0.3 — Bitirme komutu yorumla ve durdur
+
+Kullanıcının sonraki mesajı net bir bitirme sinyali mi (örn. "tamam", "dur", "bitti", "kayıt bitti", "stop", "bitirdim", "yeter")? Belirsizse **AskUserQuestion** ile teyit et: "Kaydı durdurayım mı?".
+
+Onay gelince — graceful stop (FIFO'ya `q`):
+
+```bash
+FIFO="$(cat /tmp/vtp-record.pid.fifo 2>/dev/null)"
+PID="$(cat /tmp/vtp-record.pid 2>/dev/null)"
+
+if [ -n "$FIFO" ] && [ -p "$FIFO" ]; then
+    printf 'q' > "$FIFO"
+elif [ -n "$PID" ]; then
+    kill -TERM "$PID" 2>/dev/null || true
+fi
+
+# 5 sn bekle, hala canlıysa SIGKILL
+for _ in 1 2 3 4 5; do
+    [ -z "$PID" ] && break
+    kill -0 "$PID" 2>/dev/null || break
+    sleep 1
+done
+[ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && kill -KILL "$PID" 2>/dev/null || true
+```
+
+### Step 0.4 — Background bash output'u al
+
+`whisper-tr` aynı process içinde temizleme + whisper transkriptini yapıp `TMP_OUT`'a yazar. Background bash tool'unun complete olmasını bekle, çıktıyı oku.
+
+`TMP_OUT` boş veya yoksa: kullanıcıya hata mesajı (mikrofon izni / kayıt iptali olabilir). Kayıt geri yüklenebilirliği için ham WAV `mktemp -d` ile silinir — yeniden başlatma gerekebilir.
+
+### Step 0.5 — Workflow A'nın Step 2..7'sine akıt
+
+`TMP_OUT` artık dolu bir transkript dosyası. Aşağıdaki Step 2..7'yi normal çalıştır. Step 5'te dosya rename'i:
+
+```bash
+mv "$TMP_OUT" "${OUT_DIR}/${SLUG}_${STAMP}.txt"
+OUT="${OUT_DIR}/${SLUG}_${STAMP}.txt"
+```
+
+(Workflow A'da Step 5 dosyayı sıfırdan yazar; Workflow B'de zaten `TMP_OUT` var, onu rename ediyoruz.)
 
 ### Step 2 — Mantık Taraması
 
@@ -207,6 +287,8 @@ Kullanıcı mesajında özel adlar veya teknik bağlam varsa:
 
 ## Örnek Çalışma
 
+### Workflow A — File Mode
+
 Kullanıcı: "Bu kaydı prompt et: ~/Downloads/yeni_plan.m4a"
 
 1. `whisper-tr ~/Downloads/yeni_plan.m4a -o /tmp/vtp-raw.txt -q` çalıştır
@@ -221,6 +303,18 @@ Kullanıcı: "Bu kaydı prompt et: ~/Downloads/yeni_plan.m4a"
 7. Config'e satır ekle: `\btcv(\d)\b|tcb\1`
 8. Özet ve final metin göster.
 
+### Workflow B — Record Mode
+
+Kullanıcı: "kayıt başlat, prompt vereceğim"
+
+1. `OUT_DIR` ve `TMP_OUT` hazırla
+2. `whisper-tr --record "$TMP_OUT" --pidfile /tmp/vtp-record.pid -q` (background)
+3. Kullanıcıya: "Kayıt başladı, bitince 'tamam' yazın"
+4. Kullanıcı 30 sn sonra "tamam, durdur" yazar
+5. `printf 'q' > /tmp/vtp-record.pid.fifo` → ffmpeg graceful kapanır → temizleme + transkript otomatik
+6. Background bash complete olur → `TMP_OUT` okunur
+7. Step 2..7 (mantık taraması, AskUserQuestion, slug, mv `TMP_OUT` → final, özet)
+
 ## Hata Durumları
 
 | Durum | Davranış |
@@ -232,10 +326,16 @@ Kullanıcı: "Bu kaydı prompt et: ~/Downloads/yeni_plan.m4a"
 | ffmpeg yok | `brew install ffmpeg` öner |
 | Çıktı boş | Ses kalitesi kontrol et (ffmpeg volumedetect), -30 dB altıysa uyar |
 | Ses dosyası >3 dk | Bilgilendirici mesaj ("transkript 1-2 dakika sürebilir") |
+| Record mode + Linux/WSL | "Sadece macOS, lütfen kayıt alıp dosya yolu verin" |
+| Mikrofon izni reddi (`OSStatus -1719`) | "System Settings → Privacy & Security → Microphone → Terminal/Claude Code'a izin verin, yeniden deneyin" |
+| Stale PID file (önceki kayıt çakılmış) | `rm /tmp/vtp-record.pid*` öner |
+| Kayıt çok kısa (<2 sn) | Uyar ama yine de transkript dene |
+| Kullanıcı bitirme komutu vermiyor (15 dk geçti) | ffmpeg `-t 900` ile otomatik durur, normal akışa geç |
 
 ## Kapsam Dışı
 
 - Fine-tuning veya custom model eğitimi
-- Gerçek zamanlı transkript (canlı mikrofon)
+- Gerçek zamanlı (streaming) transkript — kayıt durunca transkript başlar
 - Çoklu konuşmacı ayırma (diarization)
 - Çeviri (sadece Türkçe transkript)
+- Linux / Windows canlı mikrofon kaydı (macOS avfoundation'a bağımlı)

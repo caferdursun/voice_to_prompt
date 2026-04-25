@@ -2,6 +2,7 @@
 # =============================================================
 # whisper-tr — Türkçe + teknik İngilizce ses → metin
 # Odoo/TCB terminolojisi ön yüklü. Post-processing sözlüklü.
+# Canlı kayıt modu (--record) macOS avfoundation üzerinden.
 # =============================================================
 
 set -euo pipefail
@@ -26,9 +27,10 @@ err()  { echo -e "${RED}[FAIL]${NC}  $1" >&2; }
 usage() {
     cat <<EOF
 Kullanim: whisper-tr [secenekler] <ses_dosyasi>
+       whisper-tr --record [cikti.txt] [secenekler]
 
 Ses dosyasini Whisper large-v3 ile Turkce olarak transkript eder.
-Odoo/TCB terminolojisi ile optimize edilmistir.
+--record ile macOS mikrofonundan canli kayit alir, temizler ve transkript eder.
 
 Secenekler:
   -m, --model MODEL       Model (default: large-v3; tiny/small/medium/large-v3)
@@ -37,14 +39,21 @@ Secenekler:
       --no-normalize      Sesi normalize etme (loudnorm skip)
       --no-postproc       Post-processing regex uygulama
       --list              Kisa liste modu (small + düsük hallucination)
+      --record [FILE]     Mikrofondan canli kayit modu (sadece macOS)
+      --device DEV        avfoundation audio device (default: \${VTP_RECORD_DEVICE:-:default})
+      --max-duration SEC  Kayit ust siniri saniye (default: \${VTP_MAX_DURATION:-900})
+      --pidfile FILE      Kayit PID dosyasi (default: \${TMPDIR:-/tmp}/vtp-record.pid)
   -q, --quiet             Sadece sonuc yazdir
   -h, --help              Bu yardim
 
 Ornekler:
   whisper-tr kayit.m4a
   whisper-tr kayit.mp3 -o /tmp/out.txt
-  whisper-tr kayit.wav --list            # kelime listesi için small
+  whisper-tr kayit.wav --list                  # kelime listesi için small
   whisper-tr kayit.mp3 -p "Sena Sezer, Haydar Cetin"
+  whisper-tr --record cikti.txt                # mikrofondan canli kayit
+  whisper-tr --record --device :1 out.txt      # belirli mic
+  whisper-tr --record --max-duration 600 out.txt
 EOF
 }
 
@@ -55,6 +64,10 @@ NORMALIZE=1
 POSTPROC=1
 QUIET=0
 LIST_MODE=0
+RECORD_MODE=0
+RECORD_DEVICE="${VTP_RECORD_DEVICE:-:default}"
+MAX_DURATION="${VTP_MAX_DURATION:-900}"
+RECORD_PIDFILE="${TMPDIR:-/tmp}/vtp-record.pid"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -64,6 +77,16 @@ while [[ $# -gt 0 ]]; do
         --no-normalize) NORMALIZE=0; shift ;;
         --no-postproc)  POSTPROC=0; shift ;;
         --list)         LIST_MODE=1; MODEL="small"; shift ;;
+        --record)
+            RECORD_MODE=1
+            if [[ "${2-}" && "${2:0:1}" != "-" ]]; then
+                OUTPUT="$2"; shift 2
+            else
+                shift
+            fi ;;
+        --device)       RECORD_DEVICE="$2"; shift 2 ;;
+        --max-duration) MAX_DURATION="$2"; shift 2 ;;
+        --pidfile)      RECORD_PIDFILE="$2"; shift 2 ;;
         -q|--quiet)     QUIET=1; shift ;;
         -h|--help)      usage; exit 0 ;;
         -*)             err "Bilinmeyen secenek: $1"; usage; exit 1 ;;
@@ -76,17 +99,106 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[ -z "$INPUT" ] && { err "Ses dosyasi belirtmediniz"; usage; exit 1; }
-[ ! -f "$INPUT" ] && { err "Dosya bulunamadi: $INPUT"; exit 1; }
-[ -z "$OUTPUT" ] && OUTPUT="${INPUT%.*}.txt"
-
 # Kurulum kontrolleri
 [ ! -d "$VENV" ] && { err "Venv yok: $VENV"; err "Kurulum: python3 -m venv $VENV && source $VENV/bin/activate && pip install openai-whisper"; exit 1; }
 command -v ffmpeg >/dev/null 2>&1 || { err "ffmpeg yok. Kurulum: brew install ffmpeg"; exit 1; }
 [ ! -f "$PROMPT_FILE" ] && { err "Prompt yok: $PROMPT_FILE"; exit 1; }
 
 TEMP_DIR="$(mktemp -d)"
-trap "rm -rf ${TEMP_DIR}" EXIT
+trap 'rm -rf "$TEMP_DIR"; rm -f "$RECORD_PIDFILE" "${RECORD_PIDFILE}.fifo" 2>/dev/null || true' EXIT
+
+# =============================================================
+# Record mode (macOS only)
+# =============================================================
+record_mode() {
+    [[ "$(uname)" != "Darwin" ]] && { err "Record mode sadece macOS'ta calisir"; exit 2; }
+
+    # Stale PID kontrolu
+    if [ -f "$RECORD_PIDFILE" ]; then
+        local stale_pid
+        stale_pid="$(cat "$RECORD_PIDFILE" 2>/dev/null || echo)"
+        if [ -n "$stale_pid" ] && kill -0 "$stale_pid" 2>/dev/null; then
+            err "Zaten bir kayit calisiyor (PID $stale_pid)."
+            err "Once 'echo q > ${RECORD_PIDFILE}.fifo' veya 'kill $stale_pid' ile durdurun."
+            exit 4
+        fi
+        rm -f "$RECORD_PIDFILE" "${RECORD_PIDFILE}.fifo"
+    fi
+
+    local raw_rec="${TEMP_DIR}/rec.wav"
+    local clean_rec="${TEMP_DIR}/rec_clean.wav"
+    local fifo="${TEMP_DIR}/stdin.fifo"
+
+    mkfifo "$fifo"
+    echo "$fifo" > "${RECORD_PIDFILE}.fifo"
+
+    # FIFO'yu reader+writer olarak ac → ffmpeg EOF gormesin, q'yu beklesin
+    exec 9<>"$fifo"
+
+    [ $QUIET -eq 0 ] && info "Kayit basliyor (device=$RECORD_DEVICE, max=${MAX_DURATION}s)"
+    [ $QUIET -eq 0 ] && info "Bitirmek: 'q' tusu (terminal) veya 'echo q > $fifo'"
+
+    # Hata akisini yakalamak icin stderr'i dosyaya yaz, sonra parse et
+    local ff_stderr="${TEMP_DIR}/ff_record.stderr"
+    ffmpeg -hide_banner -loglevel error \
+        -f avfoundation -i "$RECORD_DEVICE" \
+        -ac 1 -ar 48000 -t "$MAX_DURATION" \
+        -c:a pcm_s16le -y "$raw_rec" \
+        <&9 2>"$ff_stderr" &
+    local ffpid=$!
+    echo "$ffpid" > "$RECORD_PIDFILE"
+
+    wait "$ffpid" || true
+    exec 9<&-
+
+    # Mikrofon izni hatasi tespit
+    if [ -s "$ff_stderr" ] && grep -qE "not authorized|OSStatus -1719|Failed to create AV capture" "$ff_stderr"; then
+        err "macOS mikrofon izni reddedildi."
+        err "Cozum: System Settings → Privacy & Security → Microphone → Terminal/Claude Code"
+        err "Izni verdikten sonra Terminal/Claude Code'u yeniden baslatin."
+        exit 6
+    fi
+
+    if [ ! -s "$raw_rec" ]; then
+        err "Kayit dosyasi bos. Mikrofon erisilebilir mi?"
+        [ -s "$ff_stderr" ] && err "ffmpeg: $(head -3 "$ff_stderr")"
+        exit 5
+    fi
+
+    local size
+    size="$(stat -f%z "$raw_rec" 2>/dev/null || echo 0)"
+    if [ "$size" -lt 64000 ]; then
+        warn "Kayit cok kisa (~$((size / 96000)) sn). Yine de transkript denenecek."
+    fi
+
+    [ $QUIET -eq 0 ] && info "Temizleme: afftdn + silenceremove + loudnorm"
+    ffmpeg -hide_banner -loglevel error -y -i "$raw_rec" \
+        -af "afftdn=nf=-25,silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-40dB,loudnorm=I=-16:TP=-1.5:LRA=11" \
+        -ar 48000 -ac 1 -c:a pcm_s16le "$clean_rec"
+
+    INPUT="$clean_rec"
+    NORMALIZE=0   # Step 1'deki loudnorm tekrarini engelle
+
+    # OUTPUT verilmediyse CLI default
+    if [ -z "$OUTPUT" ]; then
+        local default_dir="$(pwd)/skill_outputs"
+        mkdir -p "$default_dir"
+        OUTPUT="${default_dir}/whisper-rec-$(date +%Y%m%d-%H%M%S).txt"
+    fi
+
+    rm -f "$RECORD_PIDFILE" "${RECORD_PIDFILE}.fifo"
+}
+
+if [ $RECORD_MODE -eq 1 ]; then
+    record_mode
+fi
+
+# =============================================================
+# Standart akis
+# =============================================================
+[ -z "$INPUT" ] && { err "Ses dosyasi belirtmediniz"; usage; exit 1; }
+[ ! -f "$INPUT" ] && { err "Dosya bulunamadi: $INPUT"; exit 1; }
+[ -z "$OUTPUT" ] && OUTPUT="${INPUT%.*}.txt"
 
 [ $QUIET -eq 0 ] && info "Giris: $INPUT"
 [ $QUIET -eq 0 ] && info "Cikis: $OUTPUT"

@@ -87,3 +87,9 @@ echo
 echo "Hazır. Şimdi:"
 echo "  ./scripts/install.sh --with-cli   # whisper-tr'ı ~/bin altına symlink'le"
 echo "  whisper-tr --help                 # PATH'te ise çalışmalı"
+echo
+if [ "$(uname)" = "Darwin" ]; then
+  echo "macOS notu: Canlı kayıt (--record) kullanacaksanız Terminal/Claude Code"
+  echo "için Mikrofon iznini açtığınızdan emin olun:"
+  echo "  System Settings → Privacy & Security → Microphone → (uygulamayı seç)"
+fi

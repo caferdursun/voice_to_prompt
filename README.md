@@ -75,6 +75,8 @@ Symlink kurulumu sayesinde `git pull` yaptığınızda Claude Code güncel skill
 
 ## Kullanım
 
+### Mod 1 — Mevcut bir ses dosyasını transkript etmek
+
 Claude Code oturumunda bir ses dosyası referansı verin — skill kendiliğinden tetiklenir:
 
 ```
@@ -87,9 +89,27 @@ ya da:
 sesten prompt yap: ~/sesler/avans-talebi.wav
 ```
 
-Skill akışı:
+### Mod 2 — Mikrofondan canlı kayıt (macOS)
 
-1. `whisper-tr` ile transkript alır.
+Dosya vermeden de skill'i tetikleyebilirsiniz:
+
+```
+kayıt başlat, prompt vereceğim
+```
+
+ya da:
+
+```
+şimdi konuşacağım, mikrofondan kaydet
+```
+
+Skill `whisper-tr --record` ile macOS sistem default mikrofonundan kayıt başlatır, "tamam / dur / bitti" mesajınızla durdurur, otomatik temizleme + transkript yapar. Üst sınır 15 dk (`VTP_MAX_DURATION` ile değiştirilebilir).
+
+> **macOS Mikrofon İzni:** İlk kullanımda Terminal/Claude Code için mikrofon izin popup'ı açılır. Açılmazsa: **System Settings → Privacy & Security → Microphone → Terminal (ve Claude Code)** açın, uygulamayı yeniden başlatın.
+
+### Skill akışı (her iki mod ortak)
+
+1. Transkript al (`whisper-tr` veya `whisper-tr --record`).
 2. Çıktıyı **mantık taraması**ndan geçirir (fonetik karışıklık, syntax eksiği, özel ad, ortografi).
 3. Şüpheli yerleri **AskUserQuestion** ile size sorar (max 4 soru).
 4. Düzeltmeleri uygular ve `${VOICE_PROMPT_OUTPUT_DIR:-$(pwd)/voice_prompt_outputs}/<bağlam-slug>_<timestamp>.txt` olarak kaydeder.
@@ -103,14 +123,21 @@ whisper-tr kayit.m4a                          # sade transkript
 whisper-tr kayit.mp3 -o /tmp/out.txt          # çıktı dosyasını belirt
 whisper-tr kayit.wav --list                   # kelime listesi modu (small)
 whisper-tr kayit.mp3 -p "Ahmet Yılmaz, ARGE"  # ek terim ipucu
+whisper-tr --record cikti.txt                 # mikrofondan canlı kayıt + transkript
+whisper-tr --record --device :1 out.txt       # belirli mic (ör. MacBook Pro Mic)
+whisper-tr --record --max-duration 600 out.txt
 whisper-tr --help                             # tüm seçenekler
 ```
+
+`--record` foreground çalışır: kullanıcı `q` tuşuna basarak durdurur. Skill'in arkadan çalıştırması için bkz. SKILL.md (`--pidfile` + FIFO `q` mekanizması).
 
 ## Yapılandırma
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
 | `VOICE_PROMPT_OUTPUT_DIR` | `$(pwd)/voice_prompt_outputs` | Skill'in transkriptleri kaydettiği klasör. |
+| `VTP_RECORD_DEVICE` | `:default` | `whisper-tr --record` için avfoundation audio device (`:0`, `:1`, `:default`). |
+| `VTP_MAX_DURATION` | `900` | `--record` için maksimum kayıt süresi (saniye). |
 | `CLAUDE_SKILLS_DIR` | `~/.claude/skills` | `install.sh`'in skill'i kuracağı yer. |
 | `VOICE_PROMPT_BIN_DIR` | `~/bin` | `install.sh`'in `whisper-tr`'ı kuracağı yer. |
 | `WHISPER_TR_CONFIG_DIR` | `~/.config/whisper-tr` | `whisper-tr` config klasörü. |
