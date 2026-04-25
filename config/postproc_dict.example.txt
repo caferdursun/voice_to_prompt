@@ -1,0 +1,33 @@
+# whisper-tr post-processing kuralları (örnek/template)
+#
+# Format:  <regex_pattern>|<replacement>
+# Notlar:
+#   - Her satır bir kural. `#` ile başlayan satırlar yorumdur.
+#   - Boş satırlar atlanır.
+#   - Regex `re.IGNORECASE` flag'i ile uygulanır.
+#   - `\1`, `\2` gibi back-reference kullanılabilir.
+#   - Önce listedeki sıralamaya göre uygulanır — sıra önemli olabilir.
+#
+# Bu dosya bir TEMPLATE. Kendi sık karşılaştığınız Whisper hatalarına göre
+# satır ekleyin/çıkarın. voice-to-prompt skill'i kullanıcı onayıyla yeni
+# satırları otomatik ekleyebilir.
+
+# === Sık karşılaşılan İngilizce → İngilizce hatalar ===
+\bcloud code\b|Claude Code
+\bclod code\b|Claude Code
+\bproduct deploy\b|prod deploy
+
+# === Türkçe ortografi düzeltmeleri ===
+# Apostrof eksik özel ad örnekleri
+# \bOdoo da\b|Odoo'da
+# \bOdoo nun\b|Odoo'nun
+
+# === Underscore / dot düzeltmeleri (Whisper space koyar) ===
+# \bhr underscore payslip\b|hr_payslip
+# \bapi depends\b|api.depends
+# \bapi onchange\b|api.onchange
+
+# === Proje-spesifik regex'lerinizi buraya ekleyin ===
+# Örnek (kendinize göre değiştirin):
+# \btcv(\d+)\b|tcb\1
+# \bmuhasebe kit lik\b|muhasebe kilidi

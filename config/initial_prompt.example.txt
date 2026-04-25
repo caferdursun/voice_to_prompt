@@ -1,0 +1,21 @@
+Türkçe ve İngilizce karışık teknik konuşma. Yazılım/ERP geliştirme bağlamında çalışılıyor.
+
+# Bu dosya bir TEMPLATE'tir. Kendi projenize göre özelleştirin.
+# Whisper'a verilen `--initial_prompt` değeri olarak kullanılır.
+# Daha fazla bilgi: https://github.com/openai/whisper#prompting
+
+# === Genel programlama terimleri (örnek) ===
+# Python, pip install, virtual env, venv, PostgreSQL, psql, SQL, ORM, Git, commit, push, pull, merge, branch, rollback, SSH, JSON, XML, HTML, YAML, PDF, API, endpoint, REST, MCP, Model Context Protocol, Claude Code, Anthropic, prompt.
+
+# === Aşağıya kendi projenize özgü terimleri ekleyin: ===
+# - Modül / paket adları
+# - Şirket / ürün isimleri
+# - Sıkça konuştuğunuz kişilerin adları
+# - Domain'e özgü kısaltmalar (HR, finans, bordro, lojistik vb.)
+# - Türkçe karakterli teknik özel adlar
+
+# Örnek satırlar (ilham için — kendinize göre değiştirin):
+# Şirket isimleri: ACME Holding, Beta Yazılım, Delta Lojistik.
+# Modüller: hr_payroll, sale_management, account_invoicing, stock_warehouse.
+# Kişiler: Ahmet Yılmaz, Ayşe Demir, Mehmet Çelik.
+# Domain: bordro, ücret bordrosu, sözleşme, çalışan, departman, puantaj, SGK, BES, AGİ, yıllık izin, ücretsiz izin, avans, ikramiye, kıdem tazminatı, fazla mesai.

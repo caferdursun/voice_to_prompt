@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/marketplace.schema.json",
+  "name": "voice-to-prompt",
+  "description": "Türkçe + İngilizce karışık teknik ses kayıtlarını doğrulanmış prompt metnine dönüştüren Claude Code skill'i.",
+  "owner": {
+    "name": "Cafer Dursun",
+    "email": "caferdursun@gmail.com",
+    "url": "https://github.com/caferdursun"
+  },
+  "plugins": [
+    {
+      "name": "voice-to-prompt",
+      "source": "./skills/voice-to-prompt",
+      "description": "Ses kaydını whisper-tr ile transkript eder, mantık taraması yapar, kullanıcıya şüpheli noktaları sorar, düzeltilmiş çıktıyı timestamp'li dosyaya yazar; tekrar eden hataları Whisper config'ine eklemeyi önerir.",
+      "version": "0.1.0",
+      "category": "skill",
+      "keywords": ["voice", "transcription", "whisper", "prompt-engineering", "tr", "speech-to-text"]
+    }
+  ]
+}

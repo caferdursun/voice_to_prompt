@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs / temp
+*.log
+tmp/
+.tmp/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Claude Code yerel ayar (paylaşılmaz)
+.claude/settings.local.json
+
+# Skill'in çıktı klasörü — repoyu çalışma alanı olarak kullanırsanız
+voice_prompt_outputs/
+
+# Whisper-tr'ın geçici dosyaları (ihtimale karşı)
+vtp-raw.txt
